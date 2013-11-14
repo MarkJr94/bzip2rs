@@ -756,11 +756,12 @@ enum State {
 mod test {
     use super::Bzip2Reader;
     use std::io::{File};
+    use std::vec;
 
-    #[test]
+//     #[test]
     fn test_correct() {
-        let orig_path = Path::new("bzip2/LICENSE.txt");
-        let comp_path = Path::new("bzip2/LICENSE.txt.bz2");
+        let orig_path = Path::new("LICENSE.txt");
+        let comp_path = Path::new("LICENSE.txt.bz2");
 
         let mut orig_f = File::open(&orig_path);
         let comp_f = File::open(&comp_path);
@@ -769,6 +770,40 @@ mod test {
 
         let orig_data = orig_f.read_to_end();
         let decompressed_data = bzr.read_to_end();
+
+        if orig_data != decompressed_data {
+            let os = ::std::str::from_utf8(orig_data);
+            let ds = ::std::str::from_utf8(decompressed_data);
+            println!("Original data: \n[{:s}]\n Decompressed data: \n[{:s}]", os, ds);
+            fail!("Original data != Decompressed data");
+        }
+    }
+
+    #[test]
+    fn other_test() {
+        let orig_path = Path::new("LICENSE.txt");
+        let comp_path = Path::new("LICENSE.txt.bz2");
+
+        let mut orig_f = File::open(&orig_path);
+        let comp_f = File::open(&comp_path);
+
+        let mut bzr = Bzip2Reader::new(comp_f);
+
+        let orig_data = orig_f.read_to_end();
+
+        let mut buffer = [0u8, ..1024 * 32];
+        let mut decompressed_data = ~[];
+        while !bzr.eof() {
+            let n_read = bzr.read(buffer);
+            match n_read {
+                Some(n) => {
+                    decompressed_data = vec::append(decompressed_data, buffer.slice_to(n))
+                }
+                None => { fail!("AAAAAH!"); }
+            }
+        }
+
+//         let decompressed_data = bzr.read_to_end();
 
         if orig_data != decompressed_data {
             let os = ::std::str::from_utf8(orig_data);
