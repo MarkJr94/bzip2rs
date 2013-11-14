@@ -14,10 +14,10 @@
 #[deny(unnecessary_qualification)];
 #[warn(missing_doc)];
 
-pub use self::bzip2reader::Bzip2Reader;
+pub use self::reader::Bzip2Reader;
 
 mod macros;
 mod consts;
 mod checksum;
-mod bzip2reader;
+mod reader;
 
