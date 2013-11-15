@@ -20,4 +20,4 @@ mod macros;
 mod consts;
 mod checksum;
 mod reader;
-
+mod writer;

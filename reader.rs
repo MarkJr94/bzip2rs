@@ -1,5 +1,5 @@
-use super::checksum::StrangeCRC;
-use super::consts;
+use checksum::StrangeCRC;
+use consts;
 
 use std::io::{ Reader};
 use std::vec;

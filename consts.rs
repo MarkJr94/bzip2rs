@@ -77,7 +77,7 @@ pub static GROUP_COUNT: i32 = 6;
 pub static GROUP_SIZE: i32 = 50;
 
 /// Backend Const
-pub static NUMBER_ITERATIONS: i32 = 4;
+pub static NUMBER_OF_ITERATIONS: i32 = 4;
 
 /// Backend Const
 pub static MAXIMUM_SELECTORS: i32 = (2 + (900_000 / GROUP_SIZE));
