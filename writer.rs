@@ -549,7 +549,55 @@ fn hb_make_code_lengths(len: &mut[char], freq: &mut[i32], alpha_size: i32, max_l
             weight[0] = 0;
             parent[0] = -2;
 
-            // TODO FINISH THIS
+            for i in range_inclusive(1, alpha_size) {
+                parent[i] = -1;
+                n_heap += 1;
+                heap[n_heap] = i;
+                let mut zz: i32 = n_heap;
+                let mut tmp: i32 = heap[zz];
+                while weight[tmp] < weight[heap[zz >> 1]] {
+                    heap[zz] = heap[zz >> 1];
+                    zz >>= 1;
+                }
+                heap[zz] = tmp;
+	    }
+
+	    if !(n_heap < consts::MAXIMUM_ALPHA_SIZE + 2) {
+                fail!("PANIC!!!");
+	    }
+
+	    while n_heap > 1 {
+            n1 = heap[1];
+            heap[1] = heap[n_heap];
+            n_heap -= 1;
+            let mut zz: i32 = 1;
+            let mut yy: i32 = 0;
+            let mut tmp: i32 = heap[zz];
+
+            loop {
+                yy = zz << 1;
+                if yy > n_heap {
+                    break;
+                }
+                if yy < n_heap && weight[heap[yy + 1]] < weight[heap[yy]] {
+                    yy += 1;
+                }
+                if weight[tmp] < weight[heap[yy]] {
+                    break;
+                }
+                heap[zz] = heap[yy];
+                zz = yy;
+            }
+            heap[zz] = tmp;
+            n_nodes += 1;
+            parent[n2] = n_nodes;
+            parent[n1] = n_nodes;
+
+            weight[n_nodes] = ((weight[n1] & 0xFFffFF00) + (weight[n2] & 0xFFffFF00)) as i32 |
+                (1 + ( if  ((weight[n1] & 0x000000ff) > (weight[n2] & 0x000000ff))
+                        { weight[n1] & 0x000000ff }  else { weight[n2] & 0x000000ff } ) ) as i32;
+	    }
+
         }
 }
 
