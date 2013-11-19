@@ -26,8 +26,8 @@ pub struct Bzip2Writer<W> {
     seq_to_unseq: ~[char, ..256],
     unseq_to_seq: ~[char, ..256],
 
-    selector: ~[u8, ..consts::MAXIMUM_SELECTORS],
-    selector_mtf: ~[u8, ..consts::MAXIMUM_SELECTORS],
+    selector: ~[char, ..consts::MAXIMUM_SELECTORS],
+    selector_mtf: ~[char, ..consts::MAXIMUM_SELECTORS],
 
     block: ~[u8],
     quadrant: ~[i32],
@@ -90,8 +90,8 @@ impl<W: Writer> Bzip2Writer<W> {
             n_inuse: 0,
             seq_to_unseq: ~([0u8 as char, ..256]),
             unseq_to_seq: ~([0u8 as char, ..256]),
-            selector: ~([0, ..consts::MAXIMUM_SELECTORS]),
-            selector_mtf: ~([0, ..consts::MAXIMUM_SELECTORS]),
+            selector: ~(['\x00', ..consts::MAXIMUM_SELECTORS]),
+            selector_mtf: ~(['\x00', ..consts::MAXIMUM_SELECTORS]),
             block: ~[],
             quadrant: ~[],
             zptr: ~[],
@@ -401,12 +401,12 @@ impl<W: Writer> Bzip2Writer<W> {
 
                     for i in range_inclusive(gs, ge) {
                         let icv: i16 = self.szptr[i];
-                        cost0 += len[0][icv];
-                        cost1 += len[1][icv];
-                        cost2 += len[2][icv];
-                        cost3 += len[3][icv];
-                        cost4 += len[4][icv];
-                        cost5 += len[5][icv];
+                        cost0 += len[0][icv] as i16;
+                        cost1 += len[1][icv] as i16;
+                        cost2 += len[2][icv] as i16;
+                        cost3 += len[3][icv] as i16;
+                        cost4 += len[4][icv] as i16;
+                        cost5 += len[5][icv] as i16;
                     }
 
                     cost[0] = cost0;
@@ -428,8 +428,8 @@ impl<W: Writer> Bzip2Writer<W> {
                 bc = 999_999_999;
                 bt  -1;
                 for t in range(0, n_groups) {
-                    if cost[t] < bc {
-                        bc = cost[t];
+                    if cost[t] < bc as i16 {
+                        bc = cost[t] as i32;
                         bt = t;
                     }
                 }
@@ -473,7 +473,7 @@ impl<W: Writer> Bzip2Writer<W> {
         }
 
         for i in range(0, n_selectors) {
-            ll_i = self.selector[i] as char;
+            ll_i = self.selector[i];
             let mut j: i32 = 0;
             tmp = pos[j];
             while ll_i != tmp {
@@ -494,11 +494,11 @@ impl<W: Writer> Bzip2Writer<W> {
             min_len = 32;
             max_len = 0;
             for i in range(0, alpha_size) {
-                if len[t][i] > max_len {
-                    max_len = len[t][i];
+                if len[t][i] as i32 > max_len {
+                    max_len = len[t][i] as i32;
                 }
-                if len[t][i] < min_len {
-                    min_len = len[t][i];
+                if (len[t][i] as i32) < min_len {
+                    min_len = len[t][i] as i32;
                 }
             }
             if max_len > 20 {
@@ -511,7 +511,121 @@ impl<W: Writer> Bzip2Writer<W> {
         }
 
         // Transmit the mapping table
-        // TODO FINISH THIS
+        let in_use16: [bool, ..16] = [false, ..16];
+        for i in range(0, 16) {
+            for j in range(0, 16) {
+                if self.in_use[i * 16 + j] {
+                    in_use16[i] = true;
+                }
+            }
+        }
+
+        for i in range(0, 16) {
+            if in_use16[i] {
+                self.bs_w(1, 1);
+            } else {
+                self.bs_w(1, 0);
+            }
+        }
+
+        for i in range(0, 16) {
+            if in_use16[i] {
+                for j in range(0, 16) {
+                    if self.in_use[i * 16 + j] {
+                        self.bs_w(1, 1);
+                    } else {
+                        self.bs_w(1, 0);
+                    }
+                }
+            }
+        }
+
+        // Now the selectors
+        self.bs_w(3, n_groups);
+        self.bs_w(15, n_selectors);
+        for i in range(0, n_selectors) {
+            for j in range(0, self.selector_mtf[i] as i32) {
+                self.bs_w(1, 1);
+            }
+            self.bs_w(1, 0);
+        }
+
+        // Now the coding tables
+        for t in range(0, n_groups) {
+            let mut curr: i32 = len[t][0] as i32;
+            self.bs_w(5, curr);
+            for i in range(0, alpha_size) {
+                while curr < len[t][i] as i32 {
+                    self.bs_w(2, 2);
+                    curr += 1;
+                }
+                while curr > len[t][i] as i32 {
+                    self.bs_w(2, 3);
+                    curr -= 1;
+                }
+                self.bs_w(1, 0);
+            }
+        }
+
+        // And finally, the block data proper
+        sel_ctr = 0;
+        gs = 0;
+        loop {
+            if gs >= self.n_mtf {
+                break;
+            }
+
+            ge = gs + consts::GROUP_SIZE - 1;
+            if ge >= self.n_mtf {
+                ge = self.n_mtf - 1;
+            }
+
+            for i in range_inclusive(gs, ge) {
+                self.bs_w(len[self.selector[sel_ctr] as u32][self.szptr[i]] as i32,
+                    code[self.selector[sel_ctr] as u32][self.szptr[i]]);
+            }
+
+            gs = ge + 1;
+            sel_ctr += 1;
+        }
+        if !(sel_ctr == n_selectors) {
+            fail!("PANIC!!!");
+        }
+    }
+
+    fn move_to_front_code_and_send(&mut self) {
+        self.bs_put_intVS(24, self.orig_ptr);
+        self.generate_MTF_values();
+        self.send_MTF_values();
+    }
+
+    fn do_reversible_transformation(&mut self) {
+        self.work_limit = self.work_factor * self.last;
+        self.work_done = 0;
+        self.block_randomised = false;
+        self.first_attempt = true;
+        self.main_sort(); // TODO
+
+        if self.work_done > self.work_limit && self.first_attempt {
+            self.randomise_block(); // TODO
+            self.work_limit = 0;
+            self.work_done = 0;
+            self.block_randomised = true;
+            self.first_attempt = false;
+            self.main_sort(); // TODO
+        }
+
+        self.orig_ptr = -1;
+        for i in range_inclusive(0, self.last) {
+            if self.zptr[i] == 0 {
+                self.orig_ptr = i;
+                break;
+            }
+        }
+
+        if self.orig_ptr == -1 {
+            fail!("PANIC!!!");
+        }
     }
 
     fn allocate_compression_structures(&mut self) {
@@ -523,50 +637,145 @@ impl<W: Writer> Bzip2Writer<W> {
 
         self.szptr = vec::from_elem(n as uint * 2, 0i16);
     }
+
+    fn generate_MTF_values(&mut self) {
+        let mut yy: [char, ..256] = ['\x00', ..256];
+        let (mut i, mut j): (i32, i32);
+        let (mut tmp, mut tmp2): (char, char);
+        let mut zPend: i32;
+        let mut wr: i32;
+        let mut EOB: i32;
+
+        self.make_maps();
+        EOB = self.n_inuse + 1;
+
+        for i in range_inclusive(0, EOB) {
+            self.mt_freq[i] = 0;
+        }
+
+        wr = 0;
+        zPend = 0;
+        for i in range(0, self.n_inuse) {
+            yy[i] = from_u32(i as u32).expect("Char conversion failed.");
+        }
+
+        for i in range_inclusive(0, self.last) {
+            let mut ll_i: char;
+
+            ll_i = self.unseq_to_seq[self.block[self.zptr[i]]];
+
+            j = 0;
+            tmp = yy[j];
+            while ll_i != tmp {
+                j += 1;
+                tmp2 = tmp;
+                tmp = yy[j];
+                yy[j] = tmp2;
+            }
+            yy[0] = tmp;
+
+            if j == 0 {
+                zPend += 1;
+            } else {
+                if zPend > 0 {
+                    zPend -= 1;
+                    loop {
+                        match zPend % 2 {
+                            0 => {
+                                self.szptr[wr] = consts::RUN_A as i16;
+                                wr += 1;
+                                self.mt_freq[consts::RUN_A] += 1;
+                            }
+                            1 => {
+                                self.szptr[wr] = consts::RUN_B as i16;
+                                wr += 1;
+                                self.mt_freq[consts::RUN_B] += 1;
+                            }
+                        }
+                        if zPend < 2 {
+                            break;
+                        }
+                        zPend = (zPend - 2) / 2;
+                    }
+                    zPend = 0;
+                }
+                self.szptr[wr] = j as i16 + 1i16;
+                wr += 1;
+                self.mt_freq[j + 1] += 1;
+            }
+        }
+
+        if zPend > 0 {
+            zPend -= 1;
+            loop {
+                match zPend % 2 {
+                    0 => {
+                        self.szptr[wr] = consts::RUN_A as i16;
+                        wr += 1;
+                        self.mt_freq[consts::RUN_A] += 1;
+                    }
+                    1 => {
+                        self.szptr[wr] = consts::RUN_B as i16;
+                        wr += 1;
+                        self.mt_freq[consts::RUN_B] += 1;
+                    }
+                }
+                if zPend < 2 {
+                    break;
+                }
+                zPend = (zPend - 2) / 2;
+            }
+        }
+
+        self.szptr[wr] = j as i16 + 1i16;
+        wr += 1;
+        self.mt_freq[j + 1] += 1;
+    }
 }
 
 fn hb_make_code_lengths(len: &mut[char], freq: &mut[i32], alpha_size: i32, max_len: i32) {
     // Nodes and heap entries run from 1. Entry 0
     // for both the heap and nodes is a sentinel
-        let (mut n_nodes, mut n_heap, mut n1, mut n2, mut j, mut k):
-            (i32, i32, i32, i32, i32, i32);
+    let (mut n_nodes, mut n_heap, mut n1, mut n2, mut j, mut k):
+        (i32, i32, i32, i32, i32, i32);
 
-        let mut too_long: bool = false;
+    let mut too_long: bool = false;
 
-        let mut heap = ~([0i32, ..consts::MAXIMUM_ALPHA_SIZE + 2]);
-        let mut weight = ~([0i32, ..consts::MAXIMUM_ALPHA_SIZE * 2]);
-        let mut parent = ~([0i32, ..consts::MAXIMUM_ALPHA_SIZE * 2]);
+    let mut heap = ~([0i32, ..consts::MAXIMUM_ALPHA_SIZE + 2]);
+    let mut weight = ~([0i32, ..consts::MAXIMUM_ALPHA_SIZE * 2]);
+    let mut parent = ~([0i32, ..consts::MAXIMUM_ALPHA_SIZE * 2]);
 
-        for i in range(0, alpha_size) {
-            weight[i + 1]  = (if freq[i] == 0 { 1 } else { freq[i] } ) >> 8;
+    for i in range(0, alpha_size) {
+        weight[i + 1]  = (if freq[i] == 0 { 1 } else { freq[i] } ) >> 8;
+    }
+
+    loop {
+        n_nodes = alpha_size;
+        n_heap = 0;
+
+        heap[0] = 0;
+        weight[0] = 0;
+        parent[0] = -2;
+
+        for i in range_inclusive(1, alpha_size) {
+            parent[i] = -1;
+            n_heap += 1;
+            heap[n_heap] = i;
+            let mut zz: i32 = n_heap;
+            let mut tmp: i32 = heap[zz];
+            while weight[tmp] < weight[heap[zz >> 1]] {
+                heap[zz] = heap[zz >> 1];
+                zz >>= 1;
+            }
+            heap[zz] = tmp;
         }
 
-        loop {
-            n_nodes = alpha_size;
-            n_heap = 0;
 
-            heap[0] = 0;
-            weight[0] = 0;
-            parent[0] = -2;
-
-            for i in range_inclusive(1, alpha_size) {
-                parent[i] = -1;
-                n_heap += 1;
-                heap[n_heap] = i;
-                let mut zz: i32 = n_heap;
-                let mut tmp: i32 = heap[zz];
-                while weight[tmp] < weight[heap[zz >> 1]] {
-                    heap[zz] = heap[zz >> 1];
-                    zz >>= 1;
-                }
-                heap[zz] = tmp;
-	    }
-
-	    if !(n_heap < consts::MAXIMUM_ALPHA_SIZE + 2) {
+        if !(n_heap < consts::MAXIMUM_ALPHA_SIZE + 2) {
                 fail!("PANIC!!!");
-	    }
+        }
 
-	    while n_heap > 1 {
+        while n_heap > 1 {
             n1 = heap[1];
             heap[1] = heap[n_heap];
             n_heap -= 1;
@@ -596,9 +805,59 @@ fn hb_make_code_lengths(len: &mut[char], freq: &mut[i32], alpha_size: i32, max_l
             weight[n_nodes] = ((weight[n1] & 0xFFffFF00) + (weight[n2] & 0xFFffFF00)) as i32 |
                 (1 + ( if  ((weight[n1] & 0x000000ff) > (weight[n2] & 0x000000ff))
                         { weight[n1] & 0x000000ff }  else { weight[n2] & 0x000000ff } ) ) as i32;
-	    }
 
+            parent[n_nodes] = -1;
+            n_heap += 1;
+            heap[n_heap] = n_nodes;
+
+            zz = n_heap;
+            tmp = heap[zz];
+            while weight[tmp] < weight[heap[zz >> 1]] {
+                heap[zz] = heap[zz >> 1];
+                zz >>= 1;
+            }
+            heap[zz] = tmp;
         }
+
+        if !(n_nodes < consts::MAXIMUM_ALPHA_SIZE * 2) {
+            fail!("PANIC!!!");
+        }
+
+        too_long = false;
+        for i in range_inclusive(1, alpha_size) {
+            j = 0;
+            k = i;
+            while parent[k] >= 0 {
+                k = parent[k];
+                j += 1;
+            }
+            len[i - 1] = from_u32(j as u32).unwrap();
+            if j > max_len {
+                too_long = true;
+            }
+        }
+        if !too_long {
+            break;
+        }
+        for i in range_inclusive(1, alpha_size) {
+            j = weight[i] >> 8;
+            j = 1 + (j / 2);
+            weight[i] = j << 8;
+        }
+    }
+}
+
+fn hb_assign_codes(code: &mut[i32], length: &[char], min_len: i32, max_len: i32, alpha_size: i32) {
+    let mut vec: i32 = 0;
+    for n in range_inclusive(min_len, max_len) {
+        for i in range(0, alpha_size) {
+            if length[i] as i32 == n {
+                code[i] = vec;
+                vec += 1;
+            }
+        }
+        vec <<= 1;
+    }
 }
 
 struct StackElement {
