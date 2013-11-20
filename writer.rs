@@ -1,7 +1,7 @@
 use checksum::StrangeCRC;
 use consts;
 
-use std::io::Writer;
+use std::io::{Writer, Decorator};
 use std::iter::range_inclusive;
 use std::vec;
 use std::char::from_u32;
@@ -23,11 +23,11 @@ pub struct Bzip2Writer<W> {
     in_use: ~[bool, ..256],
     n_inuse: i32,
 
-    seq_to_unseq: ~[char, ..256],
-    unseq_to_seq: ~[char, ..256],
+    seq_to_unseq: [char, ..256],
+    unseq_to_seq: [char, ..256],
 
-    selector: ~[char, ..consts::MAXIMUM_SELECTORS],
-    selector_mtf: ~[char, ..consts::MAXIMUM_SELECTORS],
+    selector: [char, ..consts::MAXIMUM_SELECTORS],
+    selector_mtf: [char, ..consts::MAXIMUM_SELECTORS],
 
     block: ~[u8],
     quadrant: ~[i32],
@@ -37,7 +37,7 @@ pub struct Bzip2Writer<W> {
 
     n_mtf: i32,
 
-    mt_freq: ~[i32, ..consts::MAXIMUM_ALPHA_SIZE],
+    mt_freq: [i32, ..consts::MAXIMUM_ALPHA_SIZE],
 
     work_factor: i32,
     work_done: i32,
@@ -54,8 +54,35 @@ pub struct Bzip2Writer<W> {
     base_stream: W,
 }
 
-impl<W: Writer> Drop for Bzip2Writer<W> {
-    fn drop(&mut self) {
+// #[unsafe_destructor]
+// impl<W: Writer> Drop for Bzip2Writer<W> {
+//     #[unsafe_destructor]
+//     fn drop(&mut self) {
+//         if self.run_length > 0 {
+//             self.write_run();
+//         }
+//
+//         self.current_char = -1;
+//         self.end_block();
+//         self.end_compression();
+//         self.flush();
+//     }
+// }
+
+impl<W: Writer> Writer for Bzip2Writer<W> {
+    fn write(&mut self, buf: &[u8]) {
+        for &byte in buf.iter() {
+            self.write_byte(byte);
+        }
+    }
+
+    fn flush(&mut self) {
+        self.base_stream.flush();
+    }
+}
+
+impl<W: Writer> Bzip2Writer<W> {
+    pub fn finish(&mut self) {
         if self.run_length > 0 {
             self.write_run();
         }
@@ -65,9 +92,7 @@ impl<W: Writer> Drop for Bzip2Writer<W> {
         self.end_compression();
         self.flush();
     }
-}
 
-impl<W: Writer> Bzip2Writer<W> {
     pub fn new(stream: W, mut block_size: i32) -> Bzip2Writer<W> {
         if block_size < 1 {
             block_size = 1;
@@ -88,17 +113,17 @@ impl<W: Writer> Bzip2Writer<W> {
             m_crc: StrangeCRC::new(),
             in_use: ~([false, ..256]),
             n_inuse: 0,
-            seq_to_unseq: ~([0u8 as char, ..256]),
-            unseq_to_seq: ~([0u8 as char, ..256]),
-            selector: ~(['\x00', ..consts::MAXIMUM_SELECTORS]),
-            selector_mtf: ~(['\x00', ..consts::MAXIMUM_SELECTORS]),
+            seq_to_unseq: [0u8 as char, ..256],
+            unseq_to_seq: [0u8 as char, ..256],
+            selector: ['\x00', ..consts::MAXIMUM_SELECTORS],
+            selector_mtf: ['\x00', ..consts::MAXIMUM_SELECTORS],
             block: ~[],
             quadrant: ~[],
             zptr: ~[],
             szptr: ~[],
             ftab: ~[],
             n_mtf: 0,
-            mt_freq: ~([0i32, ..consts::MAXIMUM_ALPHA_SIZE]),
+            mt_freq: [0i32, ..consts::MAXIMUM_ALPHA_SIZE],
             work_factor: 50,
             work_done: 0,
             work_limit: 0,
@@ -115,9 +140,30 @@ impl<W: Writer> Bzip2Writer<W> {
         bw.bs_set_stream();
         bw.allocate_compression_structures();
         bw.initialize();
-//         bw.init_block();
-
+        bw.init_block();
         bw
+    }
+
+    #[inline(always)]
+    fn write_byte(&mut self, value: u8) {
+        let b: i32 = (256 + value as i32) % 256;
+        if self.current_char != -1 {
+            if self.current_char == b {
+                self.run_length += 1;
+                if self.run_length > 254 {
+                    self.write_run();
+                    self.current_char = -1;
+                    self.run_length = 0;
+                }
+            } else {
+                self.write_run();
+                self.run_length = 1;
+                self.current_char = b;
+            }
+        } else {
+            self.current_char = b;
+            self.run_length += 1;
+        }
     }
 
     fn make_maps(&mut self) {
@@ -136,7 +182,7 @@ impl<W: Writer> Bzip2Writer<W> {
     fn write_run(&mut self) {
         if self.last < self.allowable_block_size {
             self.in_use[self.current_char] = true;
-            for i in range(0, self.run_length) {
+            for _ in range(0, self.run_length) {
                 self.m_crc.update_val(self.current_char);
             }
 
@@ -304,7 +350,7 @@ impl<W: Writer> Bzip2Writer<W> {
         let mut len: ~[~[char]] = vec::from_fn(consts::GROUP_COUNT as uint,
             |_| vec::from_elem(consts::MAXIMUM_ALPHA_SIZE as uint, 0u8 as char));
 
-        let (mut gs, mut ge, mut totc, mut bt, mut bc, mut iter): (i32, i32, i32, i32, i32, i32);
+        let (mut gs, mut ge, mut totc, mut bt, mut bc): (i32, i32, i32, i32, i32);
         let mut n_selectors: i32 = 0;
         let mut n_groups;
 
@@ -365,7 +411,7 @@ impl<W: Writer> Bzip2Writer<W> {
         let mut cost = ~([0i16, ..consts::GROUP_COUNT]);
 
         // Iter up to N_ITERS to improve the tables
-        for iter in range(0, consts::NUMBER_OF_ITERATIONS) {
+        for _ in range(0, consts::NUMBER_OF_ITERATIONS) {
             // Zero out fave
             for t in range(0, n_groups) {
                 fave[t] = 0;
@@ -426,7 +472,7 @@ impl<W: Writer> Bzip2Writer<W> {
 
                 // Find the coding table best for this group
                 bc = 999_999_999;
-                bt  -1;
+                bt = -1;
                 for t in range(0, n_groups) {
                     if cost[t] < bc as i16 {
                         bc = cost[t] as i32;
@@ -465,7 +511,7 @@ impl<W: Writer> Bzip2Writer<W> {
         }
 
         // Compute MTF values for the selectors
-        let pos = ~([0u8 as char, ..consts::GROUP_COUNT]);
+        let mut pos = ~([0u8 as char, ..consts::GROUP_COUNT]);
         let (mut ll_i, mut tmp2, mut tmp): (char, char, char);
 
         for i in range(0u32, n_groups as u32) {
@@ -511,7 +557,7 @@ impl<W: Writer> Bzip2Writer<W> {
         }
 
         // Transmit the mapping table
-        let in_use16: [bool, ..16] = [false, ..16];
+        let mut in_use16: [bool, ..16] = [false, ..16];
         for i in range(0, 16) {
             for j in range(0, 16) {
                 if self.in_use[i * 16 + j] {
@@ -599,6 +645,417 @@ impl<W: Writer> Bzip2Writer<W> {
         self.send_MTF_values();
     }
 
+    fn simple_sort(&mut self, lo: i32, hi: i32, d: i32) {
+        let (mut i, mut j, mut h, mut bigN, mut hp): (i32, i32, i32, i32, i32);
+        let mut v: i32;
+
+        bigN = hi - lo + 1;
+        if bigN < 2 {
+            return;
+        }
+
+        hp = 0;
+        while INCREMENTS[hp] < bigN {
+            hp += 1;
+        }
+        hp -= 1;
+
+        while hp >= 0 {
+            h = INCREMENTS[hp];
+
+            i = lo + h;
+            loop {
+                // copy 1
+                if i > hi {
+                    break;
+                }
+                v = self.zptr[i];
+                j = i;
+                while self.full_gt_u(self.zptr[j - h] + d, v + d) {
+                    self.zptr[j] = self.zptr[j - h];
+                    j = j - h;
+                    if j <= lo + h - 1 {
+                        break;
+                    }
+                }
+                self.zptr[j] = v;
+                i += 1;
+
+                // copy 2
+                if i > hi {
+                    break;
+                }
+                v = self.zptr[i];
+                j = i;
+                while self.full_gt_u(self.zptr[j - h] + d, v + d) {
+                    self.zptr[j] = self.zptr[j - h];
+                    j = j - h;
+                    if j <= lo + h - 1 {
+                        break;
+                    }
+                }
+                self.zptr[j] = v;
+                i += 1;
+
+                // copy 3
+                if i > hi {
+                    break;
+                }
+                v = self.zptr[i];
+                j = i;
+                while self.full_gt_u(self.zptr[j - h] + d, v + d) {
+                    self.zptr[j] = self.zptr[j - h];
+                    j = j - h;
+                    if j <= lo + h - 1 {
+                        break;
+                    }
+                }
+                self.zptr[j] = v;
+                i += 1;
+
+                if self.work_done > self.work_limit && self.first_attempt {
+                    return;
+                }
+            }
+            hp -= 1;
+        }
+    }
+
+    fn vswap(&mut self, mut p1: i32, mut p2: i32, mut n: i32) {
+        while n > 0 {
+            let temp: i32 = self.zptr[p1];
+            self.zptr[p1] = self.zptr[p2];
+            self.zptr[p2] = temp;
+            p1 += 1;
+            p2 += 1;
+            n -= 1;
+        }
+    }
+
+    fn qsort3(&mut self, loSt: i32, hiSt: i32, dSt: i32) {
+        let (mut unLo, mut unHi, mut ltLo, mut gtHi, mut med, mut n, mut m):
+            (i32, i32, i32, i32, i32, i32, i32);
+
+        let (mut lo, mut hi, mut d): (i32, i32, i32);
+
+        let mut stack: [StackElement, ..QSORT_STACK_SIZE]
+            = [StackElement { ll: 0, dd: 0, hh: 0}, ..QSORT_STACK_SIZE];
+
+        let mut sp: i32 = 0;
+
+        stack[sp].ll = loSt;
+        stack[sp].hh = hiSt;
+        stack[sp].dd = dSt;
+        sp += 1;
+
+        while sp > 0 {
+            if sp >= QSORT_STACK_SIZE {
+                fail!("PANIC!!!");
+            }
+
+            sp -= 1;
+            lo = stack[sp].ll;
+            hi = stack[sp].hh;
+            d = stack[sp].dd;
+
+            if hi - lo < SMALL_THRESH || d > DEPTH_THRESH {
+                self.simple_sort(lo, hi, d);
+                if self.work_done > self.work_limit && self.first_attempt {
+                    return;
+                }
+                continue;
+            }
+
+            med = med3(self.block[self.zptr[lo] + d + 1],
+                self.block[self.zptr[hi            ] + d + 1],
+                self.block[self.zptr[(lo + hi) >> 1] + d + 1]) as i32;
+
+            ltLo = lo;
+            unLo = lo;
+
+            gtHi = hi;
+            unHi = hi;
+
+            loop {
+                loop {
+                    if unLo > unHi {
+                        break;
+                    }
+                    n = self.block[self.zptr[unLo] + d + 1] as i32 - med;
+                    if n == 0 {
+                        let temp: i32 = self.zptr[unLo];
+                        self.zptr[unLo] = self.zptr[ltLo];
+                        self.zptr[ltLo] = temp;
+                        ltLo += 1;
+                        unLo += 1;
+                        continue;
+                    }
+                    if n > 0 {
+                        break;
+                    }
+                    unLo += 1;
+                }
+
+                loop {
+                    if unLo > unHi {
+                        break;
+                    }
+                    n = self.block[self.zptr[unHi] + d + 1] as i32 - med;
+                    if n == 0 {
+                        let temp: i32 = self.zptr[unHi];
+                        self.zptr[unHi] = self.zptr[gtHi];
+                        self.zptr[gtHi] = temp;
+                        gtHi -= 1;
+                        unHi -= 1;
+                        continue;
+                    }
+                    if n < 0 {
+                        break;
+                    }
+                    unHi -= 1;
+                }
+
+                if unLo > unHi {
+                    break;
+                }
+
+                {
+                    let temp: i32 = self.zptr[unLo];
+                    self.zptr[unLo] = self.zptr[unHi];
+                    self.zptr[unHi] = temp;
+                    unLo += 1;
+                    unHi -= 1;
+                }
+            }
+
+            if gtHi < ltLo {
+                stack[sp].ll = lo;
+                stack[sp].hh = hi;
+                stack[sp].dd = d;
+                sp += 1;
+                continue;
+            }
+
+            n = if ltLo - lo < unLo - ltLo { ltLo - lo } else { unLo - ltLo };
+            self.vswap(lo, unLo - n, n);
+            m = if hi - gtHi < gtHi - unHi { hi - gtHi } else { gtHi - unHi };
+            self.vswap(unLo, hi - m + 1, m);
+
+            n = lo + unLo - ltLo - 1;
+            m = hi - (gtHi - unHi) + 1;
+
+            stack[sp].ll = lo;
+            stack[sp].hh = n;
+            stack[sp].dd = d;
+            sp += 1;
+
+            stack[sp].ll = n + 1;
+            stack[sp].hh = m - 1;
+            stack[sp].dd = d+1;
+            sp += 1;
+
+            stack[sp].ll = m;
+            stack[sp].hh = hi;
+            stack[sp].dd = d;
+            sp += 1;
+        }
+    }
+
+    fn main_sort(&mut self) {
+        let (mut i, mut j, mut ss, mut sb): (i32, i32, i32, i32);
+        let mut running_order: [i32, ..256] = [0i32, ..256];
+        let mut copy: [i32, ..256] = [0i32, ..256];
+        let mut big_done: [bool, ..256] = [false, ..256];
+        let (mut c1, mut c2): (i32, i32);
+        let mut num_qsorted: i32;
+
+        // In the various block-sized structures, live data runs
+        // from 0 to last+NUM_OVERSHOOT_BYTES inclusive.  First,
+        // set up the overshoot area for block.
+        for i in range(0, consts::OVERSHOOT_BYTES) {
+            self.block[self.last + i + 2] = self.block[(i % (self.last + 1)) + 1];
+        }
+        for i in range_inclusive(0, self.last + consts::OVERSHOOT_BYTES) {
+            self.quadrant[i] = 0;
+        }
+
+        self.block[0] = self.block[self.last + 1];
+
+        if self.last < 4000 {
+            // Use simple_sort(), since the full sorting mechanism
+            // has a large constant overhead
+            for i in range(0, self.last) {
+                self.zptr[i] = i;
+            }
+            self.first_attempt = false;
+            self.work_done = 0;
+            self.work_limit = 0;
+            self.simple_sort(0, self.last, 0);
+        } else {
+            num_qsorted = 0;
+            for i in range_inclusive(0, 255) {
+                big_done[i] = false;
+            }
+            for i in range_inclusive(0, 65536) {
+                self.ftab[i] = 0;
+            }
+
+            c1 = self.block[0] as i32;
+            for i in range_inclusive(0, self.last) {
+                c2 = self.block[i + 1] as i32;
+                self.ftab[(c1 << 8) + c2] += 1;
+                c1 = c2;
+            }
+
+            for i in range_inclusive(0, 65536) {
+                self.ftab[i] = self.ftab[i - 1];
+            }
+
+            c1 = self.block[1] as i32;
+            for i in range(0, self.last) {
+                c2 = self.block[i + 2] as i32;
+                j = (c1 << 8) + c2;
+                c1 = c2;
+                self.ftab[j] -= 1;
+                self.zptr[self.ftab[j]] = i;
+            }
+
+            j = ((self.block[self.last + 1]) as i32 << 8) + self.block[1] as i32;
+            self.ftab[j] -= 1;
+            self.zptr[self.ftab[j]] = self.last;
+
+            // Now ftab contains the first loc of every small bucket.
+            // Calculate the running order, from smallest to largest
+            // big bucket.
+            for i in range_inclusive(0i32, 255) {
+                running_order[i] = i;
+            }
+
+            let mut vv: i32;
+            let mut h: i32 = 1;
+            do_while!({ h = 3 * h + 1; }, h <= 256);
+            do_while!({
+                h = h / 3;
+                for i in range_inclusive(h, 255) {
+                    vv = running_order[i];
+                    j = i;
+                    while (self.ftab[(running_order[j - h] + 1) << 8]
+                            - self.ftab[(running_order[j - h]) << 8])
+                        > self.ftab[(vv + 1) << 8] - self.ftab[vv << 8] {
+                        running_order[j] = running_order[j -h];
+                        j = j - h;
+                        if j <= h - 1 {
+                            break;
+                        }
+                    }
+                    running_order[j] = vv;
+                }
+            }, h != 1);
+
+            // The main sorting loop
+            for i in range_inclusive(0, 255) {
+                // Process big buckets, starting with the least full
+                ss = running_order[i];
+
+                // Complete the big bucket [ss] by quicksorting
+                // any unsorted small buckets [ss, j].  Hopefully
+                // previous pointer-scanning phases have already
+                // completed many of the small buckets [ss, j], so
+                // we don't have to sort them at all.
+                for j in range_inclusive(0i32, 255) {
+                    sb = (ss << 8) + j;
+                    if !((self.ftab[sb] & SETMASK) == SETMASK) {
+                        let lo: i32 = self.ftab[sb] & CLEARMASK;
+                        let hi: i32 = (self.ftab[sb + 1] & CLEARMASK) - 1;
+                        if hi > lo {
+                            self.qsort3(lo, hi, 2);
+                            num_qsorted += (hi - lo + 1);
+                            if self.work_done > self.work_limit && self.first_attempt {
+                                return;
+                            }
+                        }
+                        self.ftab[sb] |= SETMASK;
+                    }
+                }
+
+                // The ss big bucket is now done.  Record this fact,
+                // and update the quadrant descriptors.  Remember to
+                // update quadrants in the overshoot area too, if
+                // necessary.  The "if (i < 255)" test merely skips
+                // this updating for the last bucket processed, since
+                // updating for the last bucket is pointless.
+                big_done[ss] = true;
+                if i < 255 {
+                    let bb_start: i32 = self.ftab[ss << 8] & CLEARMASK;
+                    let bb_size: i32 = (self.ftab[(ss + 1) << 8] & CLEARMASK) - bb_start;
+                    let mut shifts: i32 = 0;
+
+                    while bb_size >> shifts > 65534 {
+                        shifts += 1;
+                    }
+
+                    for j in range(0, bb_size) {
+                        let a2update: i32 = self.zptr[bb_start + j];
+                        let qval: i32 = (j >> shifts);
+                        self.quadrant[a2update] = qval;
+                        if a2update < consts::OVERSHOOT_BYTES {
+                            self.quadrant[a2update + self.last + 1] = qval;
+                        }
+                    }
+
+                    if !((bb_size -1 ) >> shifts <= 65535) {
+                        fail!("PANIC!!!");
+                    }
+                }
+
+                // Now scan this big bucket so as to synthesise the
+                // sorted order for small buckets [t, ss] for all t != ss.
+                for j in range_inclusive(0i32, 255) {
+                    copy[j] = self.ftab[(j << 8) + ss] & CLEARMASK;
+                }
+
+                for j in range(self.ftab[ss << 8] & CLEARMASK as i32,
+                    self.ftab[(ss + 1) << 8 & CLEARMASK]) {
+                    c1 = self.block[self.zptr[j]] as i32;
+                    if !big_done[c1] {
+                        self.zptr[copy[c1]] =
+                            if self.zptr[j] == 0 { self.last } else { self.zptr[j] - 1};
+                        copy[c1] += 1;
+                    }
+                }
+
+                for j in range_inclusive(0i32, 255) {
+                    self.ftab[(j << 8) + ss] |= SETMASK;
+                }
+            }
+        }
+    }
+
+    fn randomise_block(&mut self) {
+//         let must i: i32;
+        let mut rNToGo: i32 = 0;
+        let mut rTPos: i32 = 0;
+        for i in range(0, 256) {
+            self.in_use[i] = false;
+        }
+
+        for i in range_inclusive(0, self.last) {
+            if rNToGo == 0 {
+                rNToGo = consts::RANDOM_NUMBERS[rTPos] as i32;
+                rTPos += 1;
+                if rTPos == 512 {
+                    rTPos = 0;
+                }
+            }
+            rNToGo -= 1;
+            self.block[i + 1] ^= if rNToGo == 1 { 1u8 } else { 0u8 };
+            // handle 16-bit signed numbers
+            self.block[i + 1] &= 0xFFu8;
+
+            self.in_use[self.block[i + 1]] = true;
+        }
+    }
+
     fn do_reversible_transformation(&mut self) {
         self.work_limit = self.work_factor * self.last;
         self.work_done = 0;
@@ -626,6 +1083,131 @@ impl<W: Writer> Bzip2Writer<W> {
         if self.orig_ptr == -1 {
             fail!("PANIC!!!");
         }
+    }
+
+    fn full_gt_u(&mut self, mut i1: i32, mut i2: i32) -> bool {
+        let mut k: i32;
+        let (mut c1, mut c2): (u8, u8);
+        let (mut s1, mut s2): (i32, i32);
+
+        c1 = self.block[i1 + 1];
+        c2 = self.block[i2 + 1];
+        if (c1 != c2) {
+            return c1 > c2;
+        }
+        i1 += 1;
+        i2 += 1;
+
+        c1 = self.block[i1 + 1];
+        c2 = self.block[i2 + 1];
+        if (c1 != c2) {
+            return c1 > c2;
+        }
+        i1 += 1;
+        i2 += 1;
+
+        c1 = self.block[i1 + 1];
+        c2 = self.block[i2 + 1];
+        if (c1 != c2) {
+            return c1 > c2;
+        }
+        i1 += 1;
+        i2 += 1;
+
+        c1 = self.block[i1 + 1];
+        c2 = self.block[i2 + 1];
+        if (c1 != c2) {
+            return c1 > c2;
+        }
+        i1 += 1;
+        i2 += 1;
+
+        c1 = self.block[i1 + 1];
+        c2 = self.block[i2 + 1];
+        if (c1 != c2) {
+            return c1 > c2;
+        }
+        i1 += 1;
+        i2 += 1;
+
+        c1 = self.block[i1 + 1];
+        c2 = self.block[i2 + 1];
+        if (c1 != c2) {
+            return c1 > c2;
+        }
+        i1 += 1;
+        i2 += 1;
+
+        k = self.last + 1;
+
+        do_while!({
+            c1 = self.block[i1 + 1];
+            c2 = self.block[i2 + 1];
+            if (c1 != c2) {
+                return c1 > c2;
+            }
+            s1 = self.quadrant[i1];
+            s2 = self.quadrant[i2];
+            if s1 != s2 {
+                return s1 > s2
+            }
+            i1 += 1;
+            i2 += 1;
+
+            c1 = self.block[i1 + 1];
+            c2 = self.block[i2 + 1];
+            if (c1 != c2) {
+                return c1 > c2;
+            }
+            s1 = self.quadrant[i1];
+            s2 = self.quadrant[i2];
+            if s1 != s2 {
+                return s1 > s2
+            }
+            i1 += 1;
+            i2 += 1;
+
+            c1 = self.block[i1 + 1];
+            c2 = self.block[i2 + 1];
+            if (c1 != c2) {
+                return c1 > c2;
+            }
+            s1 = self.quadrant[i1];
+            s2 = self.quadrant[i2];
+            if s1 != s2 {
+                return s1 > s2
+            }
+            i1 += 1;
+            i2 += 1;
+
+            c1 = self.block[i1 + 1];
+            c2 = self.block[i2 + 1];
+            if (c1 != c2) {
+                return c1 > c2;
+            }
+            s1 = self.quadrant[i1];
+            s2 = self.quadrant[i2];
+            if s1 != s2 {
+                return s1 > s2
+            }
+            i1 += 1;
+            i2 += 1;
+
+            if i1 > self.last {
+                i1 -= self.last;
+                i1 -= 1;
+            }
+
+            if i2 > self.last {
+                i2 -= self.last;
+                i2 -= 1;
+            }
+
+            k -= 4;
+            self.work_done += 1;
+        }, k >= 0);
+
+        false
     }
 
     fn allocate_compression_structures(&mut self) {
@@ -660,9 +1242,7 @@ impl<W: Writer> Bzip2Writer<W> {
         }
 
         for i in range_inclusive(0, self.last) {
-            let mut ll_i: char;
-
-            ll_i = self.unseq_to_seq[self.block[self.zptr[i]]];
+            let mut ll_i: char = self.unseq_to_seq[self.block[self.zptr[i]]];
 
             j = 0;
             tmp = yy[j];
@@ -691,6 +1271,7 @@ impl<W: Writer> Bzip2Writer<W> {
                                 wr += 1;
                                 self.mt_freq[consts::RUN_B] += 1;
                             }
+                            _ => { unreachable!(); }
                         }
                         if zPend < 2 {
                             break;
@@ -719,6 +1300,7 @@ impl<W: Writer> Bzip2Writer<W> {
                         wr += 1;
                         self.mt_freq[consts::RUN_B] += 1;
                     }
+                    _ => { unreachable!(); }
                 }
                 if zPend < 2 {
                     break;
@@ -727,9 +1309,11 @@ impl<W: Writer> Bzip2Writer<W> {
             }
         }
 
-        self.szptr[wr] = j as i16 + 1i16;
+        self.szptr[wr] = EOB as i16;
         wr += 1;
-        self.mt_freq[j + 1] += 1;
+        self.mt_freq[EOB] += 1;
+
+        self.n_mtf = wr;
     }
 }
 
@@ -746,7 +1330,7 @@ fn hb_make_code_lengths(len: &mut[char], freq: &mut[i32], alpha_size: i32, max_l
     let mut parent = ~([0i32, ..consts::MAXIMUM_ALPHA_SIZE * 2]);
 
     for i in range(0, alpha_size) {
-        weight[i + 1]  = (if freq[i] == 0 { 1 } else { freq[i] } ) >> 8;
+        weight[i + 1]  = (if freq[i] == 0 { 1 } else { freq[i] } ) << 8;
     }
 
     loop {
@@ -762,7 +1346,7 @@ fn hb_make_code_lengths(len: &mut[char], freq: &mut[i32], alpha_size: i32, max_l
             n_heap += 1;
             heap[n_heap] = i;
             let mut zz: i32 = n_heap;
-            let mut tmp: i32 = heap[zz];
+            let tmp: i32 = heap[zz];
             while weight[tmp] < weight[heap[zz >> 1]] {
                 heap[zz] = heap[zz >> 1];
                 zz >>= 1;
@@ -780,9 +1364,29 @@ fn hb_make_code_lengths(len: &mut[char], freq: &mut[i32], alpha_size: i32, max_l
             heap[1] = heap[n_heap];
             n_heap -= 1;
             let mut zz: i32 = 1;
-            let mut yy: i32 = 0;
+            let mut yy: i32;
             let mut tmp: i32 = heap[zz];
 
+            loop {
+                yy = zz << 1;
+                if yy > n_heap {
+                    break;
+                }
+                if yy < n_heap && weight[heap[yy + 1]] < weight[heap[yy]] {
+                    yy += 1;
+                }
+                if weight[tmp] < weight[heap[yy]] {
+                    break;
+                }
+                heap[zz] = heap[yy];
+                zz = yy;
+            }
+            heap[zz] = tmp;
+            n2 = heap[1];
+            heap[1] = heap[n_heap];
+            n_heap -= 1;
+
+            zz = 1;
             loop {
                 yy = zz << 1;
                 if yy > n_heap {
@@ -802,7 +1406,8 @@ fn hb_make_code_lengths(len: &mut[char], freq: &mut[i32], alpha_size: i32, max_l
             parent[n2] = n_nodes;
             parent[n1] = n_nodes;
 
-            weight[n_nodes] = ((weight[n1] & 0xFFffFF00) + (weight[n2] & 0xFFffFF00)) as i32 |
+            weight[n_nodes] = ((weight[n1] as u32 & 0xFFffFF00) +
+                (weight[n2] as u32 & 0xFFffFF00)) as i32 |
                 (1 + ( if  ((weight[n1] & 0x000000ff) > (weight[n2] & 0x000000ff))
                         { weight[n1] & 0x000000ff }  else { weight[n2] & 0x000000ff } ) ) as i32;
 
@@ -860,6 +1465,25 @@ fn hb_assign_codes(code: &mut[i32], length: &[char], min_len: i32, max_len: i32,
     }
 }
 
+fn med3(mut a: u8, mut b: u8, mut c: u8) -> u8 {
+    let mut t: u8;
+    if a > b {
+        t = a;
+        a = b;
+        b = t;
+    }
+    if b > c {
+        t = b;
+        b = c;
+        c = t;
+    }
+    if a > b {
+        b = a;
+    }
+    b
+}
+
+#[deriving(Clone, ToStr, Eq)]
 struct StackElement {
     ll: i32,
     hh: i32,
@@ -871,12 +1495,42 @@ static CLEARMASK: i32 = !SETMASK;
 static GREATER_ICOST: i32 = 15;
 static LESSER_ICOST: i32 = 0;
 static SMALL_THRESH: i32 = 20;
-static DEEP_THRESH: i32 = 10;
+static DEPTH_THRESH: i32 = 10;
 
 static QSORT_STACK_SIZE: i32 = 1_000;
 
-static INCREMENTS: [int, ..14] = [1, 4, 13, 40,
+static INCREMENTS: [i32, ..14] = [1, 4, 13, 40,
     121, 364, 1093, 3280,
     9841, 29524, 88573, 265720,
     797161, 2391484];
 
+
+#[cfg(test)]
+mod test {
+    use super::Bzip2Writer;
+    use std::io::File;
+
+    #[test]
+    fn test_correct() {
+        let orig_path = Path::new("LICENSE.txt");
+        let comp_path = Path::new("LICENSE.txt.bz2");
+        let out_path = Path::new("LICENSE.txt.bz2.2");
+
+        let mut orig_f = File::open(&orig_path).unwrap();
+        let mut comp_f = File::open(&comp_path).unwrap();
+        let out_f = File::create(&out_path).unwrap();
+
+        let mut bzr = Bzip2Writer::new(out_f, 9);
+
+        let orig_data = orig_f.read_to_end();
+        let known_compressed = comp_f.read_to_end();
+        bzr.write(orig_data);
+//         bzr.finish();
+
+        let test_compressed = File::open(&out_path).read_to_end();
+
+        println!("Test Compressed: {}", test_compressed.to_str());
+        println!("Known Compressed: {}", known_compressed.to_str());
+        assert!(known_compressed == test_compressed);
+    }
+}
