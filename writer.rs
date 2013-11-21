@@ -20,7 +20,7 @@ pub struct Bzip2Writer<W> {
     bs_live: i32,
     m_crc: StrangeCRC,
 
-    in_use: ~[bool, ..256],
+    in_use: [bool, ..256],
     n_inuse: i32,
 
     seq_to_unseq: [char, ..256],
@@ -111,7 +111,7 @@ impl<W: Writer> Bzip2Writer<W> {
             bs_buff: 0,
             bs_live: 0,
             m_crc: StrangeCRC::new(),
-            in_use: ~([false, ..256]),
+            in_use: [false, ..256],
             n_inuse: 0,
             seq_to_unseq: [0u8 as char, ..256],
             unseq_to_seq: [0u8 as char, ..256],
@@ -216,12 +216,13 @@ impl<W: Writer> Bzip2Writer<W> {
                     self.last += 1;
                     self.block[self.last + 1] = self.current_char as u8;
                     self.last += 1;
-                    self.block[self.last + 1] = self.run_length as u8 - 4u8;
+                    self.block[self.last + 1] = (self.run_length - 4) as u8;
                 }
             }
         } else {
             self.end_block();
             self.init_block();
+            self.write_run();
         }
     }
 
@@ -237,7 +238,7 @@ impl<W: Writer> Bzip2Writer<W> {
         self.bs_put_uchar('B' as i32);
         self.bs_put_uchar('Z' as i32);
         self.bs_put_uchar('h' as i32);
-        self.bs_put_uchar('0' as i32 + self.block_size100k as i32);
+        self.bs_put_uchar('0' as i32 + self.block_size100k);
 
         self.combinedcrc = 0;
     }
@@ -250,6 +251,7 @@ impl<W: Writer> Bzip2Writer<W> {
             self.in_use[i] = false;
         }
 
+        // 20 is just a paranoia constant
         self.allowable_block_size = consts::BASE_BLOCK_SIZE * self.block_size100k - 20;
     }
 
@@ -405,10 +407,10 @@ impl<W: Writer> Bzip2Writer<W> {
         }
 
         let mut r_freq: ~[~[i32]] = vec::from_fn(consts::GROUP_COUNT as uint,
-            |_| vec::from_elem(consts::GROUP_COUNT as uint, 0i32));
+            |_| vec::from_elem(consts::MAXIMUM_ALPHA_SIZE as uint, 0i32));
 
-        let mut fave = ~([0i32, ..consts::GROUP_COUNT]);
-        let mut cost = ~([0i16, ..consts::GROUP_COUNT]);
+        let mut fave = [0i32, ..consts::GROUP_COUNT];
+        let mut cost = [0i16, ..consts::GROUP_COUNT];
 
         // Iter up to N_ITERS to improve the tables
         for _ in range(0, consts::NUMBER_OF_ITERATIONS) {
@@ -471,13 +473,14 @@ impl<W: Writer> Bzip2Writer<W> {
                 }
 
                 // Find the coding table best for this group
-                bc = 999_999_999;
+                bc = ::std::i16::max_value as i32;
                 bt = -1;
                 for t in range(0, n_groups) {
                     if cost[t] < bc as i16 {
                         bc = cost[t] as i32;
                         bt = t;
-                    }
+                        println("DONE");
+                    } else { println("NOT DONE"); }
                 }
                 totc += bc;
                 fave[bt] += 1;
@@ -511,7 +514,7 @@ impl<W: Writer> Bzip2Writer<W> {
         }
 
         // Compute MTF values for the selectors
-        let mut pos = ~([0u8 as char, ..consts::GROUP_COUNT]);
+        let mut pos = [0u8 as char, ..consts::GROUP_COUNT];
         let (mut ll_i, mut tmp2, mut tmp): (char, char, char);
 
         for i in range(0u32, n_groups as u32) {
@@ -851,7 +854,7 @@ impl<W: Writer> Bzip2Writer<W> {
 
             stack[sp].ll = n + 1;
             stack[sp].hh = m - 1;
-            stack[sp].dd = d+1;
+            stack[sp].dd = d + 1;
             sp += 1;
 
             stack[sp].ll = m;
@@ -884,7 +887,7 @@ impl<W: Writer> Bzip2Writer<W> {
         if self.last < 4000 {
             // Use simple_sort(), since the full sorting mechanism
             // has a large constant overhead
-            for i in range(0, self.last) {
+            for i in range_inclusive(0, self.last) {
                 self.zptr[i] = i;
             }
             self.first_attempt = false;
@@ -907,8 +910,8 @@ impl<W: Writer> Bzip2Writer<W> {
                 c1 = c2;
             }
 
-            for i in range_inclusive(0, 65536) {
-                self.ftab[i] = self.ftab[i - 1];
+            for i in range_inclusive(1, 65536) {
+                self.ftab[i] += self.ftab[i - 1];
             }
 
             c1 = self.block[1] as i32;
@@ -1015,7 +1018,7 @@ impl<W: Writer> Bzip2Writer<W> {
                 }
 
                 for j in range(self.ftab[ss << 8] & CLEARMASK as i32,
-                    self.ftab[(ss + 1) << 8 & CLEARMASK]) {
+                    self.ftab[(ss + 1) << 8] & CLEARMASK) {
                     c1 = self.block[self.zptr[j]] as i32;
                     if !big_done[c1] {
                         self.zptr[copy[c1]] =
@@ -1242,7 +1245,7 @@ impl<W: Writer> Bzip2Writer<W> {
         }
 
         for i in range_inclusive(0, self.last) {
-            let mut ll_i: char = self.unseq_to_seq[self.block[self.zptr[i]]];
+            let ll_i: char = self.unseq_to_seq[self.block[self.zptr[i]]];
 
             j = 0;
             tmp = yy[j];
@@ -1280,7 +1283,7 @@ impl<W: Writer> Bzip2Writer<W> {
                     }
                     zPend = 0;
                 }
-                self.szptr[wr] = j as i16 + 1i16;
+                self.szptr[wr] = (j + 1) as i16;
                 wr += 1;
                 self.mt_freq[j + 1] += 1;
             }
@@ -1325,9 +1328,9 @@ fn hb_make_code_lengths(len: &mut[char], freq: &mut[i32], alpha_size: i32, max_l
 
     let mut too_long: bool = false;
 
-    let mut heap = ~([0i32, ..consts::MAXIMUM_ALPHA_SIZE + 2]);
-    let mut weight = ~([0i32, ..consts::MAXIMUM_ALPHA_SIZE * 2]);
-    let mut parent = ~([0i32, ..consts::MAXIMUM_ALPHA_SIZE * 2]);
+    let mut heap = ~[0i32, ..consts::MAXIMUM_ALPHA_SIZE + 2];
+    let mut weight = ~[0i32, ..consts::MAXIMUM_ALPHA_SIZE * 2];
+    let mut parent = ~[0i32, ..consts::MAXIMUM_ALPHA_SIZE * 2];
 
     for i in range(0, alpha_size) {
         weight[i + 1]  = (if freq[i] == 0 { 1 } else { freq[i] } ) << 8;
@@ -1387,6 +1390,8 @@ fn hb_make_code_lengths(len: &mut[char], freq: &mut[i32], alpha_size: i32, max_l
             n_heap -= 1;
 
             zz = 1;
+            yy = 0;
+            tmp = heap[zz];
             loop {
                 yy = zz << 1;
                 if yy > n_heap {
@@ -1444,7 +1449,7 @@ fn hb_make_code_lengths(len: &mut[char], freq: &mut[i32], alpha_size: i32, max_l
         if !too_long {
             break;
         }
-        for i in range_inclusive(1, alpha_size) {
+        for i in range(1, alpha_size) {
             j = weight[i] >> 8;
             j = 1 + (j / 2);
             weight[i] = j << 8;
@@ -1525,7 +1530,7 @@ mod test {
         let orig_data = orig_f.read_to_end();
         let known_compressed = comp_f.read_to_end();
         bzr.write(orig_data);
-//         bzr.finish();
+        bzr.finish();
 
         let test_compressed = File::open(&out_path).read_to_end();
 
