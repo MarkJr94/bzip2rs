@@ -1,6 +1,6 @@
-#[macro_escape];
+#![macro_escape]
 
-macro_rules! do_while(
+macro_rules! do_while{
     ($body:expr, $cond:expr) => (
         loop {
             $body;
@@ -8,4 +8,4 @@ macro_rules! do_while(
             if !($cond) { break; }
         }
     )
-)
+}

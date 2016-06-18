@@ -30,7 +30,7 @@ impl StrangeCRC {
         if temp < 0 {
             temp += 256;
         }
-        self.global_crc = (self.global_crc << 8) ^ CRC32_TABLE[temp] as i32;
+        self.global_crc = (self.global_crc << 8) ^ CRC32_TABLE[temp as uint] as i32;
     }
 
     /// Update the CRC Value based on a block of data

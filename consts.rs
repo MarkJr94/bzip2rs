@@ -1,5 +1,5 @@
 /// Random Numbers used to randomise repetitive blocks
-pub static RANDOM_NUMBERS:  [i32, ..512] =  [
+pub const RANDOM_NUMBERS:  [uint, ..512] =  [
     619, 720, 127, 481, 931, 816, 813, 233, 566, 247,
     985, 724, 205, 454, 863, 491, 741, 242, 949, 214,
     733, 859, 335, 708, 621, 574, 73, 654, 730, 472,
@@ -56,31 +56,31 @@ pub static RANDOM_NUMBERS:  [i32, ..512] =  [
 
 /// When multiplied by compression parameter (1-9) gives the block size for compression
 /// 9 gives the best compression but uses the most memory
-pub static BASE_BLOCK_SIZE: i32 = 100_000;
+pub const BASE_BLOCK_SIZE: uint = 100_000;
 
 /// Backend Const
-pub static MAXIMUM_ALPHA_SIZE: i32 = 258;
+pub const MAXIMUM_ALPHA_SIZE: uint = 258;
 
 /// Backend Const
-pub static MAXIMUM_CODE_LENGTH: i32 = 23;
+pub const MAXIMUM_CODE_LENGTH: uint = 23;
 
 /// Backend Const
-pub static RUN_A: i32 = 0;
+pub const RUN_A: uint = 0;
 
 /// Backend Const
-pub static RUN_B: i32 = 1;
+pub const RUN_B: uint = 1;
 
 /// Backend Const
-pub static GROUP_COUNT: i32 = 6;
+pub const GROUP_COUNT: uint = 6;
 
 /// Backend Const
-pub static GROUP_SIZE: i32 = 50;
+pub const GROUP_SIZE: uint = 50;
 
 /// Backend Const
-pub static NUMBER_OF_ITERATIONS: i32 = 4;
+pub const NUMBER_OF_ITERATIONS: uint = 4;
 
 /// Backend Const
-pub static MAXIMUM_SELECTORS: i32 = (2 + (900_000 / GROUP_SIZE));
+pub const MAXIMUM_SELECTORS: uint = (2 + (900_000 / GROUP_SIZE));
 
 /// Backend Const
-pub static OVERSHOOT_BYTES: i32 = 20;
+pub const OVERSHOOT_BYTES: uint = 20;
